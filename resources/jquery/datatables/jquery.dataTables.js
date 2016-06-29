@@ -2140,8 +2140,20 @@
 		 *  @param {int} [iForce] force a research of the master array (1) or not (undefined or 0)
 		 *  @memberof DataTable#oApi
 		 */
-		function _fnFilterComplete ( oSettings, oInput, iForce )
+		var _fnFilterCompleteTimer;
+		function _fnFilterComplete ( oSettings, oInput, iForce, bNodelay )
 		{
+			if ( oSettings.iFilterDelay && !bNodelay )
+			{
+				if ( _fnFilterCompleteTimer )
+				{
+					clearTimeout( _fnFilterCompleteTimer );
+					_fnFilterCompleteTimer = null;
+				}
+				_fnFilterCompleteTimer = setTimeout( function() { _fnFilterComplete( oSettings, oInput, iForce, true ); }, oSettings.iFilterDelay );
+				return;
+			}
+			
 			var oPrevSearch = oSettings.oPreviousSearch;
 			var aoPrevSearch = oSettings.aoPreSearchCols;
 			var fnSaveFilter = function ( oFilter ) {
@@ -2627,7 +2639,7 @@
 			}
 			else if ( oSettings.oFeatures.bFilter )
 			{
-				_fnFilterComplete( oSettings, oSettings.oPreviousSearch );
+				_fnFilterComplete( oSettings, oSettings.oPreviousSearch, false, true );
 			}
 			else
 			{
@@ -11300,6 +11312,11 @@
 		 *  @deprecated
 		 */
 		"bFiltered": false,
+		
+		/**
+		 * Delay for applying typed-in filter value (ms)
+		 */
+		"iFilterDelay": 500,
 		
 		/**
 		 * Flag attached to the settings object so you can check in the draw 

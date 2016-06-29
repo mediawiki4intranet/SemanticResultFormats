@@ -174,6 +174,10 @@
 								var collectedValueItem = '';
 
 								$.map ( values, function( DI, key ) {
+									if ( key === 'label' ) {
+										property = DI;
+										return;
+									}
 									// For multiple values within one row/column use a separator
 									collectedValueItem += collectedValueItem !== '' && key >= 0 ? '<br />' : '';
 
@@ -195,6 +199,8 @@
 										collectedValueItem += DI.getUnit() !== '' ? DI.getValue() + ' ' + DI.getUnit() : DI.getValue();
 									} else if ( DI instanceof smw.dataItem.unknown ){
 										collectedValueItem += DI.getValue();
+									} else if ( DI.hasOwnProperty( 'fulltext' ) ) {
+										collectedValueItem += DI.fulltext;
 									}
 
 								} );
@@ -220,6 +226,13 @@
 				// Create column definitions (see aoColumnDefs)
 				// @see http://www.datatables.net/usage/columns
 				var aoColumnDefs = [];
+				if ( data.query.result.printrequests.length == data.query.ask.printouts.length+1 &&
+					 data.query.result.printrequests[0].label === '' &&
+					 data.query.result.printrequests[0].mode == 2 )
+				{
+					// API returns extra empty "print_this" column (FIXME maybe find a better way to fix it)
+					data.query.result.printrequests.shift();
+				}
 				$.map ( data.query.result.printrequests, function( property, index ) {
 					aoColumnDefs.push( {
 						'mData': property.label,
@@ -229,6 +242,30 @@
 					} );
 				} );
 				data.aoColumnDefs = aoColumnDefs;
+
+				var propIndexes = {};
+				for ( var i in data.query.ask.printouts )
+				{
+					var p = data.query.ask.printouts[i].replace(/^\s*\?|#.*$/g, '').split(/=/);
+					p = p[0].replace(/\s*$/, '').replace(/ /g, '_');
+					propIndexes[p] = i;
+					aoColumnDefs[i].propid = p;
+				}
+
+				var aaSorting = [];
+				var customSort = false;
+				if ( data.query.ask.parameters.sortkeys )
+				{
+					for ( var i in data.query.ask.parameters.sortkeys )
+					{
+						if ( propIndexes[i] )
+							aaSorting.push([ propIndexes[i], data.query.ask.parameters.sortkeys[i].toLowerCase() ]);
+						else
+							customSort = true;
+					}
+				}
+				if ( !customSort )
+					data.aaSorting = aaSorting;
 
 				// Parse and return results
 				return getResults( data.query.ask.parameters, data.query.result.results );
@@ -351,7 +388,7 @@
 			// Column filter
 			var columnFilter,
 				columnSearchFilter,
-				columnSearchInput;
+				columnSearchInput = '';
 
 			// Add column portlet
 			columnFilter = queryPanel.panel( 'portlet', {
@@ -396,10 +433,9 @@
 				'null': true,
 				change: function( event, ui ) {
 					// Clear previous fields before storing a new filter set
-					data.table.fnFilter( '', columnSearchFilter );
 					columnSearchFilter = ui.value;
-					var disabled = columnSearchFilter ? '' : 'disabled';
-					columnFilter.find( '#columnsearchinput' ).prop( 'disabled', disabled ).val( '' );
+					data.searchFilterColumnIndex = ui.value;
+					columnFilter.find( '#columnsearchinput' ).val( '' );
 				}
 			} );
 
@@ -407,17 +443,13 @@
 			columnFilter.append( '<br>' )
 			.append( html.element( 'input', {
 				'id': 'columnsearchinput',
-				'placeholder': mw.msg( 'srf-ui-datatables-label-placeholder-column-search' ),
-				'disabled': 'disabled'
+				'placeholder': mw.msg( 'srf-ui-datatables-label-placeholder-column-search' )
 			}, '' ) + '<br>' )
-			.on( 'input propertychange', '#columnsearchinput', function( event ) {
-				columnSearchInput = $( this ).val();
-				if( columnSearchInput !== '' && columnSearchFilter !== '' ){
+			.on( 'input change', '#columnsearchinput', function( event ) {
+				if ( columnSearchInput != this.value ) {
+					columnSearchInput = this.value;
 					// Apply search to the selected column
-					data.table.fnFilter( columnSearchInput, columnSearchFilter );
-				} else {
-					// Reset the search term to null
-					data.table.fnFilter( '', columnSearchFilter );
+					data.table.fnFilter( columnSearchInput );
 				}
 			} );
 
@@ -449,7 +481,7 @@
 				'fieldset': true
 			} ).find( 'fieldset' ).parameters();
 
-			// Limit parameter
+			/*// Limit parameter
 			parametersPortlet.parameters( 'limit', {
 				limit : data.query.ask.parameters.limit,
 				count : data.query.result.meta.count,
@@ -461,7 +493,7 @@
 					datatables.update( context, data );
 					event.preventDefault();
 				}
-			} );
+			} );*/
 
 			// Disclaimer and content source text
 			queryPanel.panel( 'portlet', {
@@ -487,7 +519,7 @@
 			.removeClass( 'ui-corner-all' )
 			.addClass( 'ui-corner-right' )
 			.on( 'click', function( event ){
-				datatables.update( context, data );
+				data.table.fnDraw();
 			} );
 
 			// Panel switch button
@@ -599,13 +631,56 @@
 
 			// Init dataTables
 			var sDom = context.data( 'theme' ) === 'bootstrap'? "<'row'<'span-select'l><'span-search'f>r>t<'row'<'span-list'i><'span-page'p>>" : 'lfrtip';
+			var lens = [ 10, 25, 50, 100 ];
+			var deflen = data.query.ask.parameters.limit;
+			if ( deflen ) {
+				for ( var i = 0; i < lens.length && lens[i] < deflen; i++ ) {}
+				if ( lens[i] != deflen ) {
+					lens.splice( i, 1, deflen );
+				}
+			}
+			var preSearch = $.map( data.aoColumnDefs, function( c ) { return {}; } );
 			data.table = container.find( 'table' ).dataTable( {
 				'sDom': sDom,
 				'sPaginationType': context.data( 'theme' ) === 'bootstrap' ? 'bootstrap' : 'full_numbers',
 				'bAutoWidth': false,
 				'oLanguage': _datatables.oLanguage,
-				'aaData': data.aaData,
-				'aoColumnDefs': data.aoColumnDefs
+				'aoColumnDefs': data.aoColumnDefs,
+				aoPreSearchCols: preSearch, // O_o what an idiot designed datatables API...
+				aaSorting: data.aaSorting || [],
+				bServerSide: true,
+				bPaginate: true,
+				aLengthMenu: lens,
+				iDisplayLength: deflen || 10,
+				fnServerData: function( url, params, callback )
+				{
+					var kp = {};
+					for ( var i = 0; i < params.length; i++ )
+						kp[params[i].name] = params[i].value;
+					var sort = [], order = [];
+					for ( var i = 0; i < kp.iSortingCols; i++ )
+					{
+						sort.push( kp['iSortCol_'+i] == 0 ? '' : data.aoColumnDefs[kp['iSortCol_'+i]].propid );
+						order.push( kp['sSortDir_'+i]);
+					}
+					var searchCol = null;
+					datatables.update(context, data, reload, {
+						offset: kp.iDisplayStart,
+						limit: kp.iDisplayLength,
+						search: kp.sSearch,
+						searchColumn: data.aoColumnDefs[data.searchFilterColumnIndex] && data.aoColumnDefs[data.searchFilterColumnIndex].propid,
+						sort: sort,
+						order: order
+					});
+					function reload()
+					{
+						callback({
+							iTotalRecords: data.query.result.meta.total,
+							iTotalDisplayRecords: data.query.result.meta.total,
+							aaData: data.aaData
+						});
+					}
+				}
 			} );
 
 			// Bind the imageInfo trigger and update the appropriate table cell
@@ -628,7 +703,7 @@
 		 * @param  {array} context
 		 * @param  {array} data
 		 */
-		update: function( context, data ){
+		update: function( context, data, callback, params ){
 			var self = this;
 
 			// Lock the current context to avoid queuing issues during the update
@@ -650,28 +725,90 @@
 			} );
 
 			// Collect query information
+			if ( !params.sort.length )
+			{
+				for ( var i in data.query.ask.parameters.sortkeys )
+				{
+					params.sort.push( i );
+					params.order.push( data.query.ask.parameters.sortkeys[i].toLowerCase() );
+				}
+			}
 			var conditions = data.query.ask.conditions,
 				printouts = data.query.ask.printouts,
 				parameters = {
-					'limit' : data.query.ask.parameters.limit,
-					'offset': data.query.ask.parameters.offset
+					limit: params.limit,
+					offset: params.offset,
+					sort: params.sort,
+					order: params.order
 				};
+			if ( params.search )
+			{
+				conditions = "[["+(params.searchColumn ? params.searchColumn+'::' : '')+"~*"+params.search.replace(/[\[\]]/g)+"*]] <q>"+conditions+"</q>";
+			}
 
 			// Stringify the query
 			var queryString = new smw.Query( printouts, parameters, conditions ).toString();
 
+			if ( !data.query.ask.prevConditions )
+				data.query.ask.prevConditions = data.query.ask.conditions;
+			if ( data.query.ask.prevConditions !== conditions )
+			{
+				// Update total count
+				smwApi.fetch( new smw.Query( [], { format: 'count' }, conditions ).toString(), datatables.defaults.cacheApi )
+				.done( function ( totalResult ) {
+					data.query.result.meta.total = totalResult.query.meta.count;
+					fetchResults();
+				});
+			}
+			else
+			{
+				// Avoid unneeded count requests
+				fetchResults();
+			}
+
 			// Fetch data via Ajax/SMWAPI
-			smwApi.fetch( queryString, datatables.defaults.cacheApi )
-			.done( function ( result ) {
+			function fetchResults()
+			{
+				data.query.ask.prevConditions = conditions;
+				smwApi.fetch( queryString, datatables.defaults.cacheApi )
+				.done( handleResults )
+				.fail( handleFail );
+			}
+			
+			function handleResults( result ) {
+
+				if ( result.error && result.error.query && result.error.query instanceof Array )
+					alert( result.error.query.join( "\n" ) );
+				if ( !result.query )
+					handleFail();
+
+				// Emulate the workflow of idiotic smwData parsing algorithm
+				var smwData = new smw.Data();
+				var parsedQuery = {};
+				parsedQuery.printrequests = smwData.factory( 'printrequests', result.query.printrequests );
+				parsedQuery.results = smwData.factory( 'results', result.query.results );
+				for ( var i in parsedQuery.results )
+				{
+					var r = parsedQuery.results[i];
+					var pn = {};
+					for ( var j = 0; j < r.printouts.length; j++)
+					{
+						var p = [];
+						for ( var k in r.printouts[j] )
+							if ( k != 'label' )
+								p[k] = r.printouts[j][k];
+						pn[r.printouts[j].label] = smwData.factory( r.printouts[j].label, p );
+					}
+					r.printouts = pn;
+				}
 
 				// Copy result query data and run a result parse
-				$.extend( data.query.result, result.query );
+				var total = data.query.result.meta.total;
+				$.extend( data.query.result, parsedQuery );
 				$.extend( data, _datatables.parse.results( context, data ) );
+				data.query.result.meta.total = total;
 
-				// Refresh datatables
-				data.table.fnClearTable();
-				data.table.fnAddData( data.aaData );
-				data.table.fnDraw();
+				callback();
 
 				// Update information from where the content was derived
 				context.find( '#srf-panel-information .content-source' )
@@ -697,8 +834,9 @@
 						} );
 					}
 				} );
-			} )
-			.fail( function ( error ) {
+			}
+			
+			function handleFail( error ) {
 				context.unblock( {
 					onUnblock: function(){ util.notification.create ( {
 						content: mw.msg( 'srf-ui-datatables-label-update-error' ),
@@ -706,7 +844,7 @@
 						} );
 					}
 				} );
-			} );
+			}
 		},
 
 		/**
@@ -752,11 +890,6 @@
 			// dataTables gets initialized
 			mw.loader.using( 'ext.srf.datatables.' + context.data( 'theme' ), function(){
 				datatables.init( context, container, data );
-
-				// Do an auto update if enabled via user-preferences
-				if ( datatables.defaults.autoUpdate ) {
-					datatables.update( context, data );
-				}
 			} );
 
 		} );

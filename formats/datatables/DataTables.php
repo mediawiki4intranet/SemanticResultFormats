@@ -13,6 +13,10 @@ use SMW, Html;
  */
 class DataTables extends SMW\ApiResultPrinter {
 
+	public function getQueryMode( $context ) {
+		return \SMWQuery::MODE_NONE;
+	}
+
 	/**
 	 * Corresponding message name
 	 *
@@ -85,5 +89,33 @@ class DataTables extends SMW\ApiResultPrinter {
 		);
 
 		return $params;
+	}
+
+	protected function buildResult( \SMWQueryResult $queryResult ) {
+
+		// Add parameters that are only known to the specific printer
+		$ask = $queryResult->getQuery()->toArray();
+		foreach ( $this->params as $key => $value ) {
+			if ( is_string( $value ) || is_integer( $value ) || is_bool( $value ) ) {
+				$ask['parameters'][$key] = $value;
+			}
+		}
+
+		// Combine all data into one object
+		$data = array(
+			'query' => array(
+				'result' => $queryResult->toArray(),
+				'ask'    => $ask
+			)
+		);
+
+		// Add total count
+		$q = new \SMWQuery( $queryResult->getQuery()->getDescription() );
+		$q->querymode = \SMWQuery::MODE_COUNT;
+		$data['query']['result']['meta']['total'] = \SMWQueryProcessor::getResultFromQuery(
+			$q, \SMWQueryProcessor::getProcessedParams(array(), array()), \SMWQuery::MODE_COUNT, \SMWQueryProcessor::INLINE_QUERY, $res
+		);
+
+		return $this->getHtml( $data );
 	}
 }
