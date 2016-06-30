@@ -891,6 +891,9 @@ return array(
 	// DataTables extras
 	'jquery.dataTables.extras' => $moduleTemplate + array(
 		'scripts'  => 'resources/jquery/datatables/jquery.dataTables.extras.js',
+		'dependencies' => array(
+			'jquery.dataTables'
+		)
 	),
 
 	// DataTables implementation
